@@ -2,9 +2,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import base64
 import io
-import matplotlib
-matplotlib.use('Agg')  # Set backend before importing pyplot
-import matplotlib.pyplot as plt
 from PIL import Image
 from rdkit import Chem
 from rdkit.Chem import Draw, AllChem, Descriptors
@@ -13,6 +10,7 @@ import deepchem as dc
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv
+#import pubchempy as pcp
 
 # Load environment variables and configure Gemini
 load_dotenv()
@@ -24,7 +22,7 @@ model = dc.models.GraphConvModel(n_tasks=12, mode='classification')
 print("Pretrained model loaded successfully.")
 
 app = Flask(__name__)
-CORS(app)  # Allow cross-origin requests from your React frontend
+CORS(app)  # Allow cross-origin requests from React frontend
 
 def convert_smiles_to_mol(smiles):
     try:
@@ -90,7 +88,16 @@ def get_molecule_properties(smiles):
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return None, "Invalid SMILES string"
+        
+        # Fetch molecule name using PubChem
+        try:
+            compound = pcp.get_compounds(smiles, 'smiles')
+            molecule_name = compound[0].iupac_name if compound else "Unknown Molecule"
+        except Exception:
+            molecule_name = "Unknown Molecule"
+        
         properties = {
+            "Molecule Name": molecule_name,
             "Molecular Weight": f"{Descriptors.ExactMolWt(mol):.2f}",
             "LogP": f"{Descriptors.MolLogP(mol):.2f}",
             "H-Bond Donors": str(Descriptors.NumHDonors(mol)),
@@ -99,7 +106,9 @@ def get_molecule_properties(smiles):
             "TPSA": f"{Descriptors.TPSA(mol):.2f}",
             "Aromatic Rings": str(Descriptors.NumAromaticRings(mol))
         }
+        
         explanation = (
+            f"Molecule Name: {properties['Molecule Name']}\n"
             f"Molecular Weight: {properties['Molecular Weight']} g/mol\n"
             f"LogP: {properties['LogP']} (lipophilicity)\n"
             f"H-Bond Donors: {properties['H-Bond Donors']}\n"
@@ -108,6 +117,7 @@ def get_molecule_properties(smiles):
             f"TPSA: {properties['TPSA']} Å²\n"
             f"Aromatic Rings: {properties['Aromatic Rings']}"
         )
+        
         return properties, explanation
     except Exception as e:
         return None, str(e)
@@ -143,39 +153,6 @@ Please consider all the above information when answering the following question.
     except Exception as e:
         return f"Error: {str(e)}"
 
-def generate_toxicity_plot(toxicity_results):
-    """Generate a bar chart visualization of toxicity endpoint predictions."""
-    try:
-        endpoints = list(toxicity_results.keys())
-        confidences = [float(toxicity_results[endpoint]['confidence']) for endpoint in endpoints]
-
-        plt.figure(figsize=(12, 6))
-        bars = plt.bar(endpoints, confidences, color='#4CAF50')
-        
-        # Add value labels on top of each bar
-        for bar in bars:
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height,
-                     f'{height:.2f}',
-                     ha='center', va='bottom')
-
-        plt.xticks(rotation=45, ha='right', fontsize=8)
-        plt.ylabel('Confidence Score', fontweight='bold')
-        plt.ylim(0, 1.1)
-        plt.title('Toxicity Endpoints Confidence Scores', fontweight='bold')
-        plt.grid(axis='y', linestyle='--', alpha=0.7)
-        plt.tight_layout()
-
-        # Save plot to bytes buffer
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-        plt.close()
-        buf.seek(0)
-        return base64.b64encode(buf.read()).decode('utf-8')
-    except Exception as e:
-        print(f"Error generating toxicity plot: {str(e)}")
-        return None
-
 def generate_2d_structure(smiles):
     """Generate 2D molecular structure visualization with RDKit."""
     try:
@@ -197,6 +174,25 @@ def generate_2d_structure(smiles):
     except Exception as e:
         print(f"Error generating 2D structure: {str(e)}")
         return None
+
+@app.route("/chart", methods=["POST"])
+def chart():
+    data = request.get_json()
+    smiles = data.get("smiles")
+    try:
+        # Get toxicity predictions as before
+        toxicity, _ = predict_toxicity(smiles)
+        # Convert toxicity dict to an array of objects for charting
+        predictions = []
+        for endpoint, details in toxicity.items():
+            predictions.append({
+                "endpoint": endpoint,
+                "value": details["confidence"]
+            })
+        return jsonify({"predictions": predictions})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/convert", methods=["POST"])
 def convert():
@@ -224,7 +220,6 @@ def analyze():
     toxicity, tox_explanation = predict_toxicity(smiles)
     image_base64 = generate_molecule_image(smiles)
     molecule_image_2d = generate_2d_structure(smiles)
-    toxicity_plot = generate_toxicity_plot(toxicity)
     gemini_response = ""
     if prompt:
         gemini_response = query_gemini(prompt, smiles, prop_explanation, tox_explanation)
@@ -233,6 +228,7 @@ def analyze():
         "properties": properties,
         "toxicity": toxicity,
         "molecule_image": image_base64,
+        "molecule_image_2d": molecule_image_2d,
         "gemini_response": gemini_response,
     })
 

@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 
-const PredictionsPanel = () => {
+const PredictionsPanel = ({smiles}) => {
   const [predictions, setPredictions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   // Example SMILES string; adjust as needed or pass in via props/context.
-  const smiles = "CC(=O)Oc1ccccc1C(=O)O";
+  // const smiles = "CC(=O)Oc1ccccc1C(=O)O";
 
   useEffect(() => {
     const fetchPredictions = async () => {
