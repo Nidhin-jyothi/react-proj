@@ -2,6 +2,9 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import base64
 import io
+import matplotlib
+matplotlib.use('Agg')  # Set backend before importing pyplot
+import matplotlib.pyplot as plt
 from PIL import Image
 from rdkit import Chem
 from rdkit.Chem import Draw, AllChem, Descriptors
@@ -140,6 +143,60 @@ Please consider all the above information when answering the following question.
     except Exception as e:
         return f"Error: {str(e)}"
 
+def generate_toxicity_plot(toxicity_results):
+    """Generate a bar chart visualization of toxicity endpoint predictions."""
+    try:
+        endpoints = list(toxicity_results.keys())
+        confidences = [float(toxicity_results[endpoint]['confidence']) for endpoint in endpoints]
+
+        plt.figure(figsize=(12, 6))
+        bars = plt.bar(endpoints, confidences, color='#4CAF50')
+        
+        # Add value labels on top of each bar
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height,
+                     f'{height:.2f}',
+                     ha='center', va='bottom')
+
+        plt.xticks(rotation=45, ha='right', fontsize=8)
+        plt.ylabel('Confidence Score', fontweight='bold')
+        plt.ylim(0, 1.1)
+        plt.title('Toxicity Endpoints Confidence Scores', fontweight='bold')
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+
+        # Save plot to bytes buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        plt.close()
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode('utf-8')
+    except Exception as e:
+        print(f"Error generating toxicity plot: {str(e)}")
+        return None
+
+def generate_2d_structure(smiles):
+    """Generate 2D molecular structure visualization with RDKit."""
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+            
+        # Generate 2D coordinates
+        AllChem.Compute2DCoords(mol)
+        
+        # Customize visualization
+        drawer = Draw.rdMolDraw2D.MolDraw2DSVG(400, 400)
+        drawer.DrawMolecule(mol)
+        drawer.FinishDrawing()
+        
+        # Get SVG content and convert to base64
+        svg = drawer.GetDrawingText()
+        return f"data:image/svg+xml;base64,{base64.b64encode(svg.encode()).decode()}"
+    except Exception as e:
+        print(f"Error generating 2D structure: {str(e)}")
+        return None
 
 @app.route("/convert", methods=["POST"])
 def convert():
@@ -166,6 +223,8 @@ def analyze():
     properties, prop_explanation = get_molecule_properties(smiles)
     toxicity, tox_explanation = predict_toxicity(smiles)
     image_base64 = generate_molecule_image(smiles)
+    molecule_image_2d = generate_2d_structure(smiles)
+    toxicity_plot = generate_toxicity_plot(toxicity)
     gemini_response = ""
     if prompt:
         gemini_response = query_gemini(prompt, smiles, prop_explanation, tox_explanation)
